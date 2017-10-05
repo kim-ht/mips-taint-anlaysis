@@ -20,7 +20,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <sys/user.h>
+#include <ucontext.h>
 
 /*
  * HANDLE_ERROR - Handles error. perror() and return a value.

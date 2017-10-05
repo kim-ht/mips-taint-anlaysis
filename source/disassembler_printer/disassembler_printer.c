@@ -7,6 +7,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 /// macro functions
 ///////////////////////////////////////////////////////////////////////////////
+#define StrGPR(r)  \
+    gpr_str[r & 0b11111]
 
 ///////////////////////////////////////////////////////////////////////////////
 /// function declarations
@@ -165,11 +167,11 @@ static void (*GetInstructionStringCallTable[])(char *, int,
     &GetInstructionStringBaseRtOffset,
     &GetInstructionStringRsRtImm,
     &GetInstructionStringBaseHintOffset,
-    &GetInstructionStringBaseFtOffset,  /* 40... */
+    &GetInstructionStringBaseRtOffset,  /* 40... */
+    &GetInstructionStringBaseRtOffset,
     &GetInstructionStringBaseFtOffset,
     &GetInstructionStringBaseFtOffset,
-    &GetInstructionStringBaseFtOffset,
-    &GetInstructionStringBaseFtOffset,
+    &GetInstructionStringBaseRtOffset,
     &GetInstructionStringRsRtImm,  /* 45... */
     &GetInstructionStringRsRtImm,
     &GetInstructionStringBaseRtOffset,
@@ -200,7 +202,7 @@ static void (*GetInstructionStringCallTable[])(char *, int,
     &GetInstructionStringRsImm,
     &GetInstructionStringRtRdSa,
     &GetInstructionStringRtRdSa,
-    &GetInstructionStringRtRdSa,  /* 75... */
+    &GetInstructionStringRsRtRd,  /* 75... */
     &GetInstructionStringRtRdSa,
     &GetInstructionStringRsRt,
     &GetInstructionStringRsRt,
@@ -300,148 +302,203 @@ int GetInstructionString(char *buf, int mnem_id, struct operands_t *operands,
     return 0;
 }
 
+int GetInstructionStringImmediately(char *buf, int code, unsigned int addr) {
+    struct operands_t operands;
+    int mnem_id;
+
+    mnem_id = FindCorrespondingMnemonic(code);
+    if ( mnem_id < 0 ) {
+        return -1;
+    }
+
+    if ( GetOperandFromCode(code, mnem_id, &operands) < 0 ) {
+        return -1;
+    }
+
+    if ( GetInstructionString(buf, mnem_id, &operands, addr) < 0 ) {
+        return -1;
+    }
+
+    return 0;
+}
+
 static void GetInstructionStringRsRtRd(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
     sprintf(buf, "0x%08x    %s \t%s, %s, %s", addr, mnem_str[mnem_id],
-        gpr_str[operands->rd], gpr_str[operands->rs], gpr_str[operands->rt]);
+        StrGPR(operands->rd), StrGPR(operands->rs), StrGPR(operands->rt));
 }
 
 static void GetInstructionStringRsRtImm(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "0x%08x    %s \t%s, %s, 0x%x", addr, mnem_str[mnem_id],
-        gpr_str[operands->rt], gpr_str[operands->rs], operands->imm);
+    sprintf(buf, "0x%08x    %s \t%s, %s, %hd", addr, mnem_str[mnem_id],
+        StrGPR(operands->rt), StrGPR(operands->rs), GetImm(operands->imm));
 }
 
 static void GetInstructionStringRsRtOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
+    uint32_t target;
+
+    target = ((GetOffset(operands->offset) & 0b1000000000000000) ? 
+        GetOffset(operands->offset) | 0b11111111111111110000000000000000 :
+        GetOffset(operands->offset)) << 2;
+    target += addr + 4;
+
     sprintf(buf, "0x%08x    %s \t%s, %s, 0x%x", addr, mnem_str[mnem_id],
-        gpr_str[operands->rs], gpr_str[operands->rt], operands->offset);
+        StrGPR(operands->rs), StrGPR(operands->rt), target);
 }
 
 // required to be modified.
 static void GetInstructionStringBaseOpOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s \t%s, %x(%s)", addr, mnem_str[mnem_id],
+        StrGPR(operands->op), GetOffset(operands->offset),
+        StrGPR(operands->base));
 }
 
 static void GetInstructionStringIdx(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
+    int target;
+
+    target = addr;
+    target >>= 28;
+    target <<= 28;
+    target |= operands->idx << 2;
+
     sprintf(buf, "0x%08x    %s \t0x%x", addr, mnem_str[mnem_id],
-        operands->idx*4);
+        target);
 }
 
 static void GetInstructionStringBaseRtOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "0x%08x    %s \t%s, 0x%x(%s)", addr, mnem_str[mnem_id],
-        gpr_str[operands->rt], operands->offset, gpr_str[operands->base]);
+    sprintf(buf, "0x%08x    %s \t%s, %x(%s)", addr, mnem_str[mnem_id],
+        StrGPR(operands->rt), GetOffset(operands->offset),
+        StrGPR(operands->base));
 }
 
 // required to be modified.
 static void GetInstructionStringBaseFtOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringBaseHintOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    uint32_t target;
+
+    target = ((GetOffset(operands->offset) & 0b1000000000000000) ? 
+        GetOffset(operands->offset) | 0b11111111111111110000000000000000 :
+        GetOffset(operands->offset))<< 2;
+    target += addr + 4;
+
+    sprintf(buf, "0x%08x    %s \t0x%x", addr, mnem_str[mnem_id], target);
 }
 
 static void GetInstructionStringRsOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "0x%08x    %s \t0x%x", addr, mnem_str[mnem_id],
-        addr + operands->offset);
+    uint32_t target;
+
+    target = ((GetOffset(operands->offset) & 0b1000000000000000) ? 
+        GetOffset(operands->offset) | 0b11111111111111110000000000000000 :
+        GetOffset(operands->offset)) << 2;
+    target += addr + 4;
+
+    sprintf(buf, "0x%08x    %s \t%s, 0x%x", addr, mnem_str[mnem_id],
+        StrGPR(operands->rs), target);
 }
 
 static void GetInstructionStringRsImm(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "0x%08x    %s \t%s, 0x%x", addr, mnem_str[mnem_id],
-        gpr_str[operands->rs], operands->imm);
+
+    sprintf(buf, "0x%08x    %s \t%s, %x", addr, mnem_str[mnem_id],
+        StrGPR(operands->rs), GetImm(operands->imm));
 }
 
 static void GetInstructionStringRtRdSa(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "0x%08x    %s \t%s, %s, 0x%x", addr, mnem_str[mnem_id],
-        gpr_str[operands->rd], gpr_str[operands->rt], operands->sa);
+    sprintf(buf, "0x%08x    %s \t%s, %s, %hd", addr, mnem_str[mnem_id],
+        StrGPR(operands->rd), StrGPR(operands->rt), operands->sa);
 }
 
 static void GetInstructionStringRsRt(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
     sprintf(buf, "0x%08x    %s \t%s, %s", addr, mnem_str[mnem_id],
-        gpr_str[operands->rs], gpr_str[operands->rt]);
+        StrGPR(operands->rs), StrGPR(operands->rt));
 }
 
 // required to be modified.
 static void GetInstructionStringFmtFsFd(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringRsRdHint(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s \t%s, %s", addr, mnem_str[mnem_id],
+        StrGPR(operands->rd), StrGPR(operands->rs));
 }
 
 // required to be modified.
 static void GetInstructionStringRsCcRd(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringFmtFtFsFd(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringRsHint(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s \t%s", addr, mnem_str[mnem_id],
+        StrGPR(operands->rs));
 }
 
 // required to be modified.
 static void GetInstructionStringCode20(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s \t%u", addr, mnem_str[mnem_id],
+        GetCode20(operands->code20));
 }
 
 // required to be modified.
 static void GetInstructionStringFmtRtFsFd(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringRsRtCode10(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringCcOffset(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringRtFs(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringRtRdSel(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
@@ -453,42 +510,42 @@ static void GetInstructionStringNoneOp(char *buf, int mnem_id,
 // required to be modified.
 static void GetInstructionStringFmtFtFsCcCond(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 static void GetInstructionStringRtImm(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "0x%08x    %s \t%s 0x%x", addr, mnem_str[mnem_id],
-        gpr_str[operands->rt], operands->imm);
+    sprintf(buf, "0x%08x    %s \t%s, %hd", addr, mnem_str[mnem_id],
+        StrGPR(operands->rt), GetImm(operands->imm));
 }
 
 // required to be modified.
 static void GetInstructionStringCofun(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 static void GetInstructionStringRd(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
     sprintf(buf, "0x%08x    %s \t%s", addr, mnem_str[mnem_id],
-        gpr_str[operands->rd]);
+        StrGPR(operands->rd));
 }
 
 static void GetInstructionStringRs(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
     sprintf(buf, "0x%08x    %s \t%s", addr, mnem_str[mnem_id],
-        gpr_str[operands->rs]);
+        StrGPR(operands->rs));
 }
 
 // required to be modified.
 static void GetInstructionStringStype(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 
 // required to be modified.
 static void GetInstructionStringImp(char *buf, int mnem_id,
     struct operands_t *operands, unsigned int addr) {
-    sprintf(buf, "not implemented.\n");
+    sprintf(buf, "0x%08x    %s not implemented.", addr, mnem_str[mnem_id]);
 }
 

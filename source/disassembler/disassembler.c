@@ -52,6 +52,10 @@
         return ID_XOR;  \
     case MASK_SLT:  \
         return ID_SLT;  \
+    case MASK_SLLV:  \
+        return ID_SLLV;  \
+    case MASK_SRAV:  \
+        return ID_SRAV;  \
     }  \
 }
 
@@ -218,8 +222,6 @@
         return ID_SLL;  \
     case MASK_SRA:  \
         return ID_SRA;  \
-    case MASK_SRAV:  \
-        return ID_SRAV;  \
     case MASK_SRL:  \
         return ID_SRL;  \
     }  \
@@ -414,8 +416,6 @@
         return ID_MFC1;  \
     case MASK_MTC1:  \
         return ID_MTC1;  \
-    case MASK_SLLV:  \
-        return ID_SLLV;  \
     }  \
 }
 
@@ -654,11 +654,11 @@ static void (*GetOperandFromCodeTable[])(int, struct operands_t *) = {
     &ParseBaseRtOffset,
     &ParseRsRtImm,
     &ParseBaseHintOffset,
-    &ParseBaseFtOffset,  /* 40... */
+    &ParseBaseRtOffset,  /* 40... */
+    &ParseBaseRtOffset,
     &ParseBaseFtOffset,
     &ParseBaseFtOffset,
-    &ParseBaseFtOffset,
-    &ParseBaseFtOffset,
+    &ParseBaseRtOffset,
     &ParseRsRtImm,  /* 45... */
     &ParseRsRtImm,
     &ParseBaseRtOffset,
@@ -745,7 +745,7 @@ static void (*GetOperandFromCodeTable[])(int, struct operands_t *) = {
     &ParseRtFs,
     &ParseRtFs,
     &ParseRtFs,  /* 130... */
-    &ParseRtRdSa,
+    &ParseRsRtRd,
     &ParseRtRdSel,
     &ParseRtRdSel,
     &ParseRtRdSel,

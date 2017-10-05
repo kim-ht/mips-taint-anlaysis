@@ -11,6 +11,17 @@
 #include "../base/base.h"
 
 ///////////////////////////////////////////////////////////////////////////////
+/// macro functions
+///////////////////////////////////////////////////////////////////////////////
+#define GetOffset(o)  \
+    (o & 0b1111111111111111)
+
+#define GetImm(i)  \
+    (i & 0b1111111111111111)
+
+#define GetCode20(c)  \
+    (c & 0b11111111111111111111)
+///////////////////////////////////////////////////////////////////////////////
 /// function prototypes
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -25,6 +36,17 @@
  */
 int GetInstructionString(char *buf, int mnem_id, struct operands_t *operands,
     unsigned int addr);
+
+/*
+ * GetInstructionStringImmediately - Gets string of instruction disassembled.
+ *                                   immediately.
+ *
+ * @buf - Buffer to store the result string.
+ * @code - The machine code to be disassembled.
+ * @addr - The address the instruction locating.
+ * @return - 0 on success; -1 on failure.
+ */
+int GetInstructionStringImmediately(char *buf, int code, unsigned int addr);
 
 #endif
 
