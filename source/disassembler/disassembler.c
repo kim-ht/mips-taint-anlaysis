@@ -815,9 +815,9 @@ int GetOperandFromCode(int code, int mnem_id, struct operands_t *operands) {
 
     if ( mnem_id < 136 || 143 < mnem_id ) {
         GetOperandFromCodeTable[mnem_id](code, operands);
-
         return 0;
     }
+
     return -1;
 }
 
@@ -876,7 +876,7 @@ static void ParseBaseOpOffset(int code, struct operands_t *operands) {
  * @operands - a struct to store operands parsed.
  */
 static void ParseIdx(int code, struct operands_t *operands) {
-    operands->offset = code & 0b00000011111111111111111111111111;
+    operands->idx = code & 0b00000011111111111111111111111111;
 }
 
 /*
