@@ -12,6 +12,7 @@ struct rbtree tree;
 struct rbnode sentinel;
 
 /* tainting status */
+FILE *tc_result;
 struct pt_regs tc_regs;
 struct pt_regs tc_regs_after;
 struct pt_regs tc_tstat;
@@ -23,6 +24,9 @@ int tc_dest;
 int tc_lr;
 int tc_size;
 int tc_is_tainting;
+char tc_comment[512];
+int tc_indent;
+int tc_is_branch;
 
 char *tainted_str[] = {
     "UNTAINTED",
@@ -41,6 +45,11 @@ static int SavePostTaintInfo(pid_t traced_pid);
 ///////////////////////////////////////////////////////////////////////////////
 
 void TaintCheckerInit() {
+    dup2(123, 1);
+
+    unlink("./result");
+    tc_result = fopen("./result", "wb");
+
     rbtree_init(&tree, &sentinel);
 
     memset(&tc_regs, 0x00, sizeof(struct pt_regs));
@@ -54,6 +63,9 @@ void TaintCheckerInit() {
     tc_lr = NO_DIRECTION;
     tc_size = 4;
     tc_is_tainting = UNTAINTING;
+    memset(&tc_comment, 0x00, 256);
+    tc_indent = 10;
+    tc_is_branch = 0;
 }
 
 /*
@@ -73,6 +85,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
     tc_src = SRC_NOP;
     tc_dest = DEST_NOP;
     tc_is_tainting = NOTHING;
+    tc_is_branch = NO_BRANCH;
 
     switch ( tc_mnem_id ) {
     case ID_ADD:
@@ -93,6 +106,11 @@ int GetFlowOfInstruction(pid_t traced_pid) {
     case ID_XOR:
         tc_src = SRC_RT | SRC_RS;
         tc_dest = DEST_RD;
+
+        sprintf(tc_comment, "%s(0x%x)-%s = %s(0x%x)-%s op %s(0x%x)-%s",
+                gpr_str[GetGPR(tc_op.rd)], GetRegsGPR(&tc_regs, tc_op.rd), tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rd)],
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs), tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)],
+                gpr_str[GetGPR(tc_op.rt)], GetRegsGPR(&tc_regs, tc_op.rt), tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rt)]);
 
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ||
                 IsTaintedGPR(&tc_tstat, tc_op.rs) ) {
@@ -115,6 +133,12 @@ int GetFlowOfInstruction(pid_t traced_pid) {
     case ID_XORI:
         tc_src = SRC_RS | SRC_IMM;
         tc_dest = DEST_RT;
+
+
+        sprintf(tc_comment, "%s(0x%x)-%s = %s(0x%x)-%s op IMMEIDIATE(0x%x)-UNTAINTED",
+                gpr_str[GetGPR(tc_op.rt)], GetRegsGPR(&tc_regs, tc_op.rt),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rt)],
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)],
+                GetImm(tc_op.imm));
 
         if ( IsTaintedGPR(&tc_tstat, tc_op.rs) ) {
             tc_is_tainting = TAINTING;
@@ -139,6 +163,11 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_OFFSET | SRC_PC;
         tc_dest = DEST_PC;
 
+        sprintf(tc_comment, "pc(0x%x)-%s = pc(0x%x)-%s + OFFSET(0x%x)",
+                GetRegsPC(&tc_regs), tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs), tainted_str[IsTaintedPC(&tc_tstat)],
+                SignExtend16(GetOffset(tc_op.offset)));
+
         if ( IsTaintedPC(&tc_tstat) ) {
             tc_is_tainting = TAINTING;
             tc_tstat.cp0_epc = TSTAT_TAINTED;
@@ -161,6 +190,13 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_OFFSET | SRC_RS | SRC_PC;
         tc_dest = DEST_PC;
 
+
+        sprintf(tc_comment, "pc(0x%x)-%s = pc(0x%x)-%s + OFFSET(0x%x)-UNTAINTED by condition %s(0x%x)-%s",
+                GetRegsPC(&tc_regs), tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetOffset(tc_op.offset),
+                gpr_str[GetGPR(tc_op.rt)], GetRegsGPR(&tc_regs, tc_op.rt), tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rt)]);
+
         if ( IsTaintedGPR(&tc_tstat, tc_op.rs) || IsTaintedPC(&tc_tstat) ) {
             tc_is_tainting = TAINTING;
             tc_tstat.cp0_epc = TSTAT_TAINTED;
@@ -179,6 +215,16 @@ int GetFlowOfInstruction(pid_t traced_pid) {
     case ID_BLTZALL:
         tc_src = SRC_OFFSET | SRC_RS | SRC_PC;
         tc_dest = DEST_PC | DEST_RA;
+
+
+        sprintf(tc_comment, "ra(0x%x)-%s = pc(0x%x)-%s, pc(0x%x)-%s = pc(0x%x)-%s + OFFSET(0x%x)-UNTAINTED",
+                GetRegsGPR(&tc_regs, 31),tainted_str[IsTaintedGPR(&tc_tstat, 31)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                SignExtend16(GetOffset(tc_op.offset)));
+
+        tc_is_branch = BRANCH;
 
         if ( IsTaintedPC(&tc_tstat) ) {
             tc_is_tainting = TAINTING;
@@ -208,6 +254,13 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_OFFSET | SRC_RS | SRC_RT | SRC_PC;
         tc_dest = DEST_PC;
 
+        sprintf(tc_comment, "pc(0x%x)-%s = pc(0x%x)-%s + OFFSET(0x%x)-UNTAINTED by condition %s(0x%x)-%s lop %s(0x%x)-%s",
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetOffset(tc_op.offset),
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)],
+                gpr_str[GetGPR(tc_op.rt)], GetRegsGPR(&tc_regs, tc_op.rt),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rt)]);
+
         if ( IsTaintedGPR(&tc_tstat, tc_op.rs) ||
                 IsTaintedGPR(&tc_tstat, tc_op.rt) ||
                 IsTaintedPC(&tc_tstat) ) {
@@ -236,6 +289,17 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_TARGET | SRC_PC;
         tc_dest = DEST_PC | DEST_RA;
 
+        target = GetRegsPC(&tc_regs);
+        target >>= 28;
+        target <<= 28;
+        target |= tc_op.idx << 2;
+
+        sprintf(tc_comment, "ra(0x%x)-%s = pc(0x%x)-%s, pc(0x%x)-%s = TARGET(0x%x)-UNTAINTED",
+                GetRegsGPR(&tc_regs, 31),tainted_str[IsTaintedGPR(&tc_tstat, 31)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                target);
+
         if ( IsTaintedPC(&tc_tstat) ) {
             tc_is_tainting = TAINTING;
             tc_tstat.regs[31] = TSTAT_TAINTED;
@@ -255,6 +319,14 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_RS;
         tc_dest = DEST_PC;
 
+        sprintf(tc_comment, "pc(0x%x)-%s = %s(0x%x)-%s",
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)]);
+
+        if ( GetGPR(tc_op.rs) == 31 ) {
+            tc_is_branch = BRANCH;
+        }
+
         if ( IsTaintedGPR(&tc_tstat, tc_op.rs) ) {
             tc_is_tainting = TAINTING;
             tc_tstat.cp0_epc = TSTAT_TAINTED;
@@ -269,6 +341,14 @@ int GetFlowOfInstruction(pid_t traced_pid) {
     case ID_JALR:
         tc_src = SRC_RS | SRC_PC;
         tc_dest = DEST_PC | DEST_RA;
+
+        sprintf(tc_comment, "ra(0x%x)-%s = pc(0x%x)-%s, pc(0x%x)-%s = %s(0x%x)-%s",
+                GetRegsGPR(&tc_regs, 31),tainted_str[IsTaintedGPR(&tc_tstat, 31)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                GetRegsPC(&tc_regs),tainted_str[IsTaintedPC(&tc_tstat)],
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)]);
+
+        tc_is_branch = BRANCH;
 
         if ( IsTaintedPC(&tc_tstat) ) {
             tc_is_tainting = TAINTING;
@@ -294,6 +374,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_OFFSET | SRC_BASE;
         tc_dest = DEST_RT;
 
+        sprintf(tc_comment, "load 4 bytes from 0x%08x", target);
 
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ) {
             tc_is_tainting = UNTAINTING;
@@ -341,7 +422,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         }
         target = SignExtend16(GetOffset(tc_op.offset)) +
                  GetRegsGPR(&tc_regs, tc_op.base);
-        printf("load from 0x%08x\n", target);
+        sprintf(tc_comment, "load 4 bytes from 0x%08x", target);
         for ( i = 0; i < 4; ++i ) {
             if ( rbtree_search(&tree, target + i) ) {
                 tc_is_tainting = MEM_TAINTING;
@@ -356,6 +437,9 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_size = 2;
         tc_src = SRC_OFFSET |SRC_BASE;
         tc_dest = DEST_RT;
+
+
+        sprintf(tc_comment, "load 2 bytes of left from 0x%08x", target);
 
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ) {
             tc_is_tainting = UNTAINTING;
@@ -386,6 +470,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_OFFSET | SRC_BASE;
         tc_dest = DEST_RT;
 
+        sprintf(tc_comment, "load 2 bytes of right from 0x%08x", target);
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ) {
             tc_is_tainting = UNTAINTING;
         } else {
@@ -413,6 +498,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_IMM;
         tc_dest = DEST_RT;
 
+
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ) {
             tc_is_tainting = UNTAINTING;
         }
@@ -426,7 +512,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
 
         target = SignExtend16(GetOffset(tc_op.offset)) +
                  GetRegsGPR(&tc_regs, tc_op.base);
-        printf("store to 0x%08x\n", target);
+        sprintf(tc_comment, "store 4 bytes to 0x%08x", target);
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ) {
             tc_is_tainting = MEM_TAINTING;
             for ( i = 0; i < 4; ++i ) {
@@ -455,6 +541,8 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_size = 4;
         tc_src = SRC_RT;
         tc_dest = DEST_OFFSET | DEST_BASE;
+
+        sprintf(tc_comment, "store 4 bytes to 0x%08x", target);
 
         target = SignExtend16(GetOffset(tc_op.offset)) +
                  GetRegsGPR(&tc_regs, tc_op.base);
@@ -487,6 +575,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_size = 4;
         tc_src = SRC_RT;
         tc_dest = DEST_OFFSET | DEST_BASE;
+        sprintf(tc_comment, "store 4 bytes to 0x%08x", target);
         target = SignExtend16(GetOffset(tc_op.offset)) +
                  GetRegsGPR(&tc_regs, tc_op.base);
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ) {
@@ -581,6 +670,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_RT;
         tc_dest = DEST_OFFSET | DEST_BASE;
 
+        sprintf(tc_comment, "store 2 bytes of left to 0x%08x", target);
         target = SignExtend16(GetOffset(tc_op.offset)) +
                  GetRegsGPR(&tc_regs, tc_op.base);
 
@@ -616,6 +706,8 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_size = 2;
         tc_src = SRC_RT;
         tc_dest = DEST_OFFSET | DEST_BASE;
+
+        sprintf(tc_comment, "store 2 bytes of right to 0x%08x", target);
 
         target = SignExtend16(GetOffset(tc_op.offset)) +
                  GetRegsGPR(&tc_regs, tc_op.base);
@@ -654,6 +746,12 @@ int GetFlowOfInstruction(pid_t traced_pid) {
         tc_src = SRC_RT | SRC_RS;
         tc_dest = DEST_HI | DEST_LO;
 
+        sprintf(tc_comment, "hi(0x%x)-%s, lo(0x%x)-%s = %s(0x%x)-%s op %s(0x%x)-%s",
+                GetRegsHI(&tc_regs),tainted_str[IsTaintedHI(&tc_tstat)],
+                GetRegsLO(&tc_regs),tainted_str[IsTaintedLO(&tc_tstat)],
+                gpr_str[GetGPR(tc_op.rt)], GetRegsGPR(&tc_regs, tc_op.rt),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rt)],
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)]);
+
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ||
                 IsTaintedGPR(&tc_tstat, tc_op.rs) ) {
             tc_tstat.lo = TSTAT_TAINTED;
@@ -673,6 +771,12 @@ int GetFlowOfInstruction(pid_t traced_pid) {
     case ID_MADDU:
         tc_src = SRC_RT | SRC_RS | SRC_HI | SRC_LO;
         tc_dest = DEST_HI | DEST_LO;
+
+        sprintf(tc_comment, "hi(0x%x)-%s, lo(0x%x)-%s = %s(0x%x)-%s op %s(0x%x)-%s",
+                GetRegsHI(&tc_regs),tainted_str[IsTaintedHI(&tc_tstat)],
+                GetRegsLO(&tc_regs),tainted_str[IsTaintedLO(&tc_tstat)],
+                gpr_str[GetGPR(tc_op.rt)], GetRegsGPR(&tc_regs, tc_op.rt),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rt)],
+                gpr_str[GetGPR(tc_op.rs)], GetRegsGPR(&tc_regs, tc_op.rs),tainted_str[IsTaintedGPR(&tc_tstat, tc_op.rs)]);
 
         if ( IsTaintedGPR(&tc_tstat, tc_op.rt) ||
                 IsTaintedGPR(&tc_tstat, tc_op.rs) ||
@@ -791,6 +895,7 @@ int GetFlowOfInstruction(pid_t traced_pid) {
 int TaintCheckerPreHandler(pid_t traced_pid) {
     char buf[128];
     int pc;
+    int i;
 
     ptrace(PTRACE_GETREGS, traced_pid, 0, &tc_regs);
     pc = GetRegsPC(&tc_regs);
@@ -802,6 +907,9 @@ int TaintCheckerPreHandler(pid_t traced_pid) {
     }
     GetFlowOfInstruction(traced_pid);
 
+    for ( i = 0; i < tc_indent; ++i ) {
+        printf("  ");
+    }
     if ( tc_is_tainting == TAINTING ) {
         printf("\x1B[32;47m\e[1m");
     } else if ( tc_is_tainting == UNTAINTING ) {
@@ -814,8 +922,41 @@ int TaintCheckerPreHandler(pid_t traced_pid) {
     } else {
         printf("\x1B[0;0m\e[0m");
     }
-    printf(buf);
+    if ( tc_is_tainting == NOTHING ) {
+        printf("%s", buf);
+    } else {
+        if ( tc_mnem_id != ID_SYSCALL ) {
+            printf("%s %158s", buf, tc_comment);
+        } else {
+            printf("%s", buf);
+        }
+    }
     printf("\x1B[0;0m\e[0m\n");
+    if ( tc_is_branch ) {
+        for ( i = 0; i < tc_indent; ++i ) {
+            printf("  ");
+        }
+        printf(" |\n");
+        for ( i = 0; i < tc_indent; ++i ) {
+            printf("  ");
+        }
+        printf(" V\n");
+    }
+
+    if ( tc_mnem_id == ID_JAL ) {
+            ++tc_indent;
+    } else if ( tc_mnem_id == ID_JR ) {
+        if ( GetGPR(tc_op.rs) == 31 ) {
+            --tc_indent;
+        }
+    } else if ( tc_mnem_id == ID_JALR ) {
+            ++tc_indent;
+    } else if ( tc_mnem_id == ID_BAL || tc_mnem_id == ID_BGEZAL ||
+            tc_mnem_id == ID_BGEZALL || tc_mnem_id == ID_BLTZAL ||
+            tc_mnem_id == ID_BLTZALL   ) {
+            ++tc_indent;
+    }
+
     return 0;
 }
 
@@ -1049,13 +1190,12 @@ int TaintCheckerPostHandler(pid_t traced_pid) {
         if ( size <= 0 ) {
             return 0;
         }
-        printf("\x1B[34;47m\e[1m");
-        printf("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n");
-        printf("               read %d bytes              \n", size);
-        printf("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n");
-        printf("\x1B[0;0m");
+        printf("\x1B[34;47m\e[1m@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\x1B[0;0m\n");
+        printf("\x1B[34;47m\e[1m             read() %d bytes              \x1B[0;0m\n", size);
+        printf("\x1B[34;47m\e[1m@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\x1B[0;0m\n");
 
         /* Iterates during size. */
+        printf(" << mem tainting info >>\n");
         for ( i = 0; i < size; ++i ) {
             target = GetRegsGPR(&tc_regs, 5);
             val = (ptrace(PTRACE_PEEKTEXT, traced_pid, target + i, 0) >> 8 * 3);

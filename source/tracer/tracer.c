@@ -96,6 +96,8 @@ static int RunTargetWithTrace(const char *path, char *const argv[],
 static int RunDebugger(pid_t traced_pid, int start_addr, int end_addr) {
     int wait_status;
 
+    dup2(123, 1);
+
     printf("traced_pid: %u\n", traced_pid);
 
     wait(&wait_status);
@@ -108,7 +110,7 @@ static int RunDebugger(pid_t traced_pid, int start_addr, int end_addr) {
     }
 
     TaintCheckerInit();
-    InitResultFile();
+    
 
     while ( WIFSTOPPED(wait_status) ) {
 
