@@ -1,7 +1,0 @@
-int main(void) {
-    __asm__(
-
-    );
-
-    return 0;
-}
